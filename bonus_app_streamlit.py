@@ -1,8 +1,8 @@
 import openpyxl
 from collections import defaultdict
 from datetime import datetime
-
-import streamlit as st  # pip install streamlit
+from openpyxl.utils.datetime import from_excel
+import streamlit as st
 
 # ===========================
 #       CONSTANTS
@@ -13,18 +13,43 @@ BONUS_AVG_130  = 20
 BONUS_AVG_140  = 25
 BONUS_AVG_150  = 35
 
-QUANTITY_COL_NAME = 'כמות'
+QUANTITY_COL_NAME = "כמות"
+
+REQUIRED_COLS = ["מספר חשבונית", "מוכרן", "תאריך", "מחיר נטו ליחידה"]
+
 
 # ===========================
 #       HELPERS
 # ===========================
 def parse_date(date_str: str):
-    for fmt in ('%d/%m/%Y %H:%M', '%Y-%m-%d'):
+    """נסיון לפענח תאריך ממחרוזת בכמה פורמטים."""
+    for fmt in ("%d/%m/%Y %H:%M", "%Y-%m-%d", "%d/%m/%Y"):
         try:
             return datetime.strptime(date_str, fmt).date()
         except ValueError:
             continue
     return None
+
+
+def find_header_row(sheet, required_cols):
+    """
+    מחפשת את שורת הכותרות בגיליון.
+    מדלגת על שורות ריקות / שורה עם השם שלך בלבד וכו'.
+    מחזירה: (מספר_שורה, dict של שם עמודה -> אינדקס).
+    """
+    for row_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+        col_idx = {}
+        for i, value in enumerate(row):
+            if value is None:
+                continue
+            key = str(value).strip()
+            if key:
+                col_idx[key] = i
+
+        if col_idx and all(col in col_idx for col in required_cols):
+            return row_idx, col_idx
+
+    raise KeyError("לא נמצאה שורת כותרות מתאימה בקובץ (עמודות חובה לא אותרו יחד).")
 
 
 def calculate_transaction_bonuses(sales_data, transactions_count):
@@ -39,20 +64,20 @@ def calculate_transaction_bonuses(sales_data, transactions_count):
             for total in totals:
                 if total > 400:
                     bonuses[emp] += BONUS_OVER_400
-                    details[emp]['בונוס על עסקאות מעל 400'] += BONUS_OVER_400
+                    details[emp]["בונוס על עסקאות מעל 400"] += BONUS_OVER_400
                 if total > 700:
                     bonuses[emp] += BONUS_OVER_700
-                    details[emp]['בונוס על עסקאות מעל 700'] += BONUS_OVER_700
+                    details[emp]["בונוס על עסקאות מעל 700"] += BONUS_OVER_700
 
-            if   avg > 150:
+            if avg > 150:
                 bonuses[emp] += BONUS_AVG_150
-                details[emp]['בונוס על ממוצע עסקה'] += BONUS_AVG_150
+                details[emp]["בונוס על ממוצע עסקה"] += BONUS_AVG_150
             elif avg > 140:
                 bonuses[emp] += BONUS_AVG_140
-                details[emp]['בונוס על ממוצע עסקה'] += BONUS_AVG_140
+                details[emp]["בונוס על ממוצע עסקה"] += BONUS_AVG_140
             elif avg > 130:
                 bonuses[emp] += BONUS_AVG_130
-                details[emp]['בונוס על ממוצע עסקה'] += BONUS_AVG_130
+                details[emp]["בונוס על ממוצע עסקה"] += BONUS_AVG_130
 
     return bonuses, details
 
@@ -65,36 +90,25 @@ def analyze_workbook(file_obj):
     מקבל קובץ אקסל (file-like) ומחזיר:
     bonuses, details, daily_totals, transactions_count
     """
-    wb    = openpyxl.load_workbook(file_obj, data_only=True)
+    wb = openpyxl.load_workbook(file_obj, data_only=True)
     sheet = wb.active
 
-    # קריאת כותרות מהשורה הראשונה
-    col_idx = {}
-    for i, cell in enumerate(sheet[1]):
-        if cell.value:
-            key = str(cell.value).strip()
-            col_idx[key] = i
+    # למצוא שורת כותרות אמיתית (גם אם יש 5–6 שורות ריקות / שורה עם השם שלך)
+    header_row, col_idx = find_header_row(sheet, REQUIRED_COLS)
 
-    # בדיקת עמודות חובה
-    required_cols = ['מספר חשבונית', 'מוכרן', 'תאריך', 'מחיר נטו ליחידה']
-    for col in required_cols:
-        if col not in col_idx:
-            raise KeyError(f"חסרה עמודה: {col}")
-
+    # אם אין עמודת כמות – נניח תמיד 1
     if QUANTITY_COL_NAME not in col_idx:
-        col_idx[QUANTITY_COL_NAME] = None  # נניח 1 כברירת מחדל
+        col_idx[QUANTITY_COL_NAME] = None
 
     per_invoice        = defaultdict(lambda: defaultdict(list))
     transactions_count = defaultdict(lambda: defaultdict(int))
     daily_totals       = defaultdict(lambda: defaultdict(list))
 
-    from openpyxl.utils.datetime import from_excel
-
-    for row in sheet.iter_rows(min_row=2, values_only=True):  # משורה שנייה
-        invoice = row[col_idx['מספר חשבונית']]
-        emp     = row[col_idx['מוכרן']]
-        date_raw= row[col_idx['תאריך']]
-        unit    = row[col_idx['מחיר נטו ליחידה']]
+    for row in sheet.iter_rows(min_row=header_row + 1, values_only=True):
+        invoice = row[col_idx["מספר חשבונית"]]
+        emp     = row[col_idx["מוכרן"]]
+        date_raw= row[col_idx["תאריך"]]
+        unit    = row[col_idx["מחיר נטו ליחידה"]]
 
         # כמות
         if col_idx[QUANTITY_COL_NAME] is not None:
@@ -105,7 +119,7 @@ def analyze_workbook(file_obj):
         # תאריך
         if isinstance(date_raw, datetime):
             date = date_raw.date()
-        elif isinstance(date_raw, float):
+        elif isinstance(date_raw, (int, float)):
             date = from_excel(date_raw).date()
         elif isinstance(date_raw, str):
             date = parse_date(date_raw)
@@ -118,6 +132,7 @@ def analyze_workbook(file_obj):
             line_total = unit * qty
             per_invoice[emp][(date, invoice)].append(line_total)
 
+    # סכימה לפי חשבונית -> יום -> מוכרן
     for emp, invoices in per_invoice.items():
         for (date, _inv), lines in invoices.items():
             total = sum(lines)
@@ -156,7 +171,9 @@ def build_report_text(bonuses, details, daily_totals, transactions_count) -> str
             total = sum(totals)
             cnt   = transactions_count[emp][date]
             avg   = total / cnt if cnt else 0
-            lines.append(f"{date.strftime('%d.%m'):<10}\t{avg:>12.2f}\t\t{total:>10.2f}")
+            lines.append(
+                f"{date.strftime('%d.%m'):<10}\t{avg:>12.2f}\t\t{total:>10.2f}"
+            )
         lines.append("")
 
     return "\n".join(lines)
@@ -169,25 +186,29 @@ def main():
     st.set_page_config(page_title="מנתח קובצי מכירה", layout="wide")
 
     st.title("מנתח קובצי מכירה – חישוב בונוסים")
-    st.write("העלה קובץ אקסל בפורמט שבו אתה משתמש כרגע, והמערכת תחשב בונוסים ותציג דוח.")
+    st.write("העלה קובץ אקסל כפי שמתקבל מהקופה, והמערכת תחפש לבד את שורת הכותרות ותחשב בונוסים.")
 
     uploaded_file = st.file_uploader("בחר קובץ אקסל", type=["xlsx"])
 
     if uploaded_file is not None:
         try:
-            bonuses, details, daily_totals, transactions_count = analyze_workbook(uploaded_file)
-            report_text = build_report_text(bonuses, details, daily_totals, transactions_count)
+            bonuses, details, daily_totals, transactions_count = analyze_workbook(
+                uploaded_file
+            )
+            report_text = build_report_text(
+                bonuses, details, daily_totals, transactions_count
+            )
 
             st.success("הקובץ עובד ונותח בהצלחה!")
-            st.subheader("דוח טקסט מסודר")
+
+            st.subheader("תצוגת דוח")
             st.text(report_text)
 
-            # כפתור להורדת הדוח כקובץ טקסט
             st.download_button(
                 label="הורד דוח כקובץ TXT",
                 data=report_text.encode("utf-8"),
                 file_name="bonus_report.txt",
-                mime="text/plain"
+                mime="text/plain",
             )
 
         except KeyError as e:
