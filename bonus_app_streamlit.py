@@ -185,6 +185,34 @@ def build_report_text(bonuses, details, daily_totals, transactions_count) -> str
 def main():
     st.set_page_config(page_title="מנתח קובצי מכירה", layout="wide")
 
+    st.markdown("""
+    <style>
+        html, body, [class*="css"]  {
+            direction: rtl !important;
+            text-align: right !important;
+            font-family: "Alef", sans-serif;
+        }
+
+        /* יישור לימין של תיבת הטקסט של הדוח */
+        .stText, .stMarkdown, .stTextInput, pre, code {
+            direction: rtl !important;
+            text-align: right !important;
+        }
+
+        /* יישור לימין של כפתורים, כותרות וכל הרכיבים */
+        .stButton, .stDownloadButton, .stSelectbox, .stFileUploader {
+            direction: rtl !important;
+            text-align: right !important;
+        }
+
+        /* יישור לטבלאות (אם תוסיף בהמשך) */
+        table {
+            direction: rtl !important;
+            text-align: right !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
     st.title("מנתח קובצי מכירה – חישוב בונוסים")
     st.write("העלה קובץ אקסל כפי שמתקבל מהקופה, והמערכת תחפש לבד את שורת הכותרות ותחשב בונוסים.")
 
@@ -219,3 +247,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
