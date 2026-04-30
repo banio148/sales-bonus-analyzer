@@ -215,7 +215,7 @@ def build_employee_daily_df(emp, daily_totals, transactions_count):
 # ===========================
 def main():
     st.set_page_config(
-        page_title="מנתח קובצי מכירה",
+        page_title="מנתח קובצי מכירה פילטר דינאמי",
         page_icon="📊",
         layout="wide",
     )
