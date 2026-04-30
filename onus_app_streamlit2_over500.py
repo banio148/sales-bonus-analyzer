@@ -24,7 +24,6 @@ REQUIRED_COLS = ["מספר חשבונית", "מוכרן", "תאריך", "מחי�
 #       HELPERS
 # ===========================
 def parse_date(date_str: str):
-    """נסיון לפענח תאריך ממחרוזת בכמה פורמטים."""
     for fmt in ("%d/%m/%Y %H:%M", "%Y-%m-%d", "%d/%m/%Y"):
         try:
             return datetime.strptime(date_str, fmt).date()
@@ -94,12 +93,13 @@ def analyze_workbook(file_obj):
     per_invoice        = defaultdict(lambda: defaultdict(list))
     transactions_count = defaultdict(lambda: defaultdict(int))
     daily_totals       = defaultdict(lambda: defaultdict(list))
+    all_transactions   = []  # list of dicts: {מוכרן, תאריך, סכום עסקה}
 
     for row in sheet.iter_rows(min_row=header_row + 1, values_only=True):
-        invoice = row[col_idx["מספר חשבונית"]]
-        emp     = row[col_idx["מוכרן"]]
-        date_raw= row[col_idx["תאריך"]]
-        unit    = row[col_idx["מחיר נטו ליחידה"]]
+        invoice  = row[col_idx["מספר חשבונית"]]
+        emp      = row[col_idx["מוכרן"]]
+        date_raw = row[col_idx["תאריך"]]
+        unit     = row[col_idx["מחיר נטו ליחידה"]]
 
         if col_idx[QUANTITY_COL_NAME] is not None:
             qty = row[col_idx[QUANTITY_COL_NAME]] or 1
@@ -126,12 +126,17 @@ def analyze_workbook(file_obj):
             total = sum(lines)
             transactions_count[emp][date] += 1
             daily_totals[emp][date].append(total)
+            all_transactions.append({
+                "מוכרן": emp,
+                "תאריך": date,
+                "סכום עסקה": total,
+            })
 
     bonuses, details = calculate_transaction_bonuses(
         daily_totals, transactions_count
     )
 
-    return bonuses, details, daily_totals, transactions_count
+    return bonuses, details, daily_totals, transactions_count, all_transactions
 
 
 def build_report_text(bonuses, details, daily_totals, transactions_count) -> str:
@@ -215,7 +220,7 @@ def build_employee_daily_df(emp, daily_totals, transactions_count):
 # ===========================
 def main():
     st.set_page_config(
-        page_title="מנתח קובצי מכירה פילטר דינאמי",
+        page_title="מנתח קובצי מכירה",
         page_icon="📊",
         layout="wide",
     )
@@ -227,34 +232,29 @@ def main():
                 text-align: right !important;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Alef", sans-serif;
             }
-
             .block-container {
                 padding-top: 2.5rem;
                 padding-bottom: 2rem;
             }
-
             h1, h2, h3, h4 {
                 text-align: right !important;
             }
-
             .stButton>button, .stDownloadButton>button {
                 border-radius: 999px;
                 padding: 0.5rem 1.5rem;
                 font-weight: 600;
             }
-
             .stDataFrame, .stTable {
                 direction: rtl !important;
                 text-align: right !important;
             }
-
             table {
                 direction: rtl !important;
             }
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("📊 מנתח קובצי מכירה – חישוב בונוסים")
+    st.title("📊 מנתח קובצי מכירה - פילטר דינאמי")
     st.caption("העלה קובץ אקסל מהקופה והמערכת תחשב בונוסים ותציג דשבורד מסודר.")
 
     uploaded_file = st.file_uploader("בחר קובץ אקסל", type=["xlsx"])
@@ -264,7 +264,7 @@ def main():
         return
 
     try:
-        bonuses, details, daily_totals, transactions_count = analyze_workbook(
+        bonuses, details, daily_totals, transactions_count, all_transactions = analyze_workbook(
             uploaded_file
         )
 
@@ -272,11 +272,12 @@ def main():
             bonuses, details, daily_totals, transactions_count
         )
 
-        summary_df = build_summary_df(bonuses, daily_totals, transactions_count)
+        summary_df  = build_summary_df(bonuses, daily_totals, transactions_count)
+        all_tx_df   = pd.DataFrame(all_transactions)
 
-        total_emps   = len(bonuses)
-        total_bonus  = sum(bonuses.values())
-        total_sales  = summary_df["סך מכירות"].sum() if not summary_df.empty else 0
+        total_emps  = len(bonuses)
+        total_bonus = sum(bonuses.values())
+        total_sales = summary_df["סך מכירות"].sum() if not summary_df.empty else 0
 
         st.success("הקובץ עובד ונותח בהצלחה!")
 
@@ -287,69 +288,118 @@ def main():
 
         st.markdown("---")
 
-        st.subheader("סיכום לפי מוכרן")
-        if summary_df.empty:
-            st.warning("לא נמצאו נתונים להצגה.")
-        else:
-            st.dataframe(
-                summary_df.style.format({
-                    "סך בונוס": "{:,.0f} ₪",
-                    "סך מכירות": "{:,.0f} ₪",
-                    "מספר עסקאות": "{:,.0f}",
-                    "ממוצע לעסקה": "{:,.1f} ₪",
-                }),
-                use_container_width=True,
+        # ── טאבים: "כולם" + טאב לכל מוכרן ────────────────────
+        emp_list   = list(bonuses.keys())
+        tab_labels = ["כולם"] + emp_list
+        tabs       = st.tabs(tab_labels)
+
+        # ── טאב "כולם" ─────────────────────────────────────────
+        with tabs[0]:
+            st.subheader("סיכום לפי מוכרן")
+            if summary_df.empty:
+                st.warning("לא נמצאו נתונים להצגה.")
+            else:
+                st.dataframe(
+                    summary_df.style.format({
+                        "סך בונוס": "{:,.0f} ₪",
+                        "סך מכירות": "{:,.0f} ₪",
+                        "מספר עסקאות": "{:,.0f}",
+                        "ממוצע לעסקה": "{:,.1f} ₪",
+                    }),
+                    use_container_width=True,
+                )
+
+            st.markdown("---")
+            st.subheader("🔍 פילטר עסקאות לפי סכום")
+
+            min_price_all = st.number_input(
+                "מכירות מעל:",
+                min_value=0,
+                value=0,
+                step=50,
+                key="price_filter_all"
             )
 
-        st.markdown("### פירוט לפי מוכרן")
+            filtered_all = all_tx_df[all_tx_df["סכום עסקה"] > min_price_all]
 
-        if bonuses:
-            emp_list = list(bonuses.keys())
-            selected_emp = st.selectbox("בחר מוכרן לפירוט:", emp_list)
+            if not filtered_all.empty:
+                counts_df = (
+                    filtered_all.groupby("מוכרן")
+                    .size()
+                    .reset_index(name="כמות עסקאות")
+                    .sort_values("כמות עסקאות", ascending=False)
+                )
+                st.caption(f"סה״כ **{len(filtered_all)}** עסקאות מעל {min_price_all:,} ₪")
+                st.dataframe(counts_df, use_container_width=True)
+            else:
+                st.info("לא נמצאו עסקאות מעל הסכום שנבחר.")
 
-            emp_daily_df = build_employee_daily_df(
-                selected_emp, daily_totals, transactions_count
-            )
+        # ── טאב לכל מוכרן ──────────────────────────────────────
+        for i, emp in enumerate(emp_list):
+            with tabs[i + 1]:
 
-            col_emp1, col_emp2 = st.columns([2, 1])
+                # ביצועים יומיים + פירוט בונוסים
+                emp_daily_df = build_employee_daily_df(emp, daily_totals, transactions_count)
 
-            with col_emp1:
-                st.markdown(f"#### ביצועים יומיים – {selected_emp}")
+                col_emp1, col_emp2 = st.columns([2, 1])
 
-                # ========== פילטר דינמי ==========
-                min_price = st.number_input(
+                with col_emp1:
+                    st.markdown(f"#### ביצועים יומיים – {emp}")
+                    if emp_daily_df.empty:
+                        st.write("אין נתונים להצגה עבור מוכרן זה.")
+                    else:
+                        st.dataframe(
+                            emp_daily_df.style.format({
+                                "סך מכירות יומי": "{:,.0f} ₪",
+                                "מספר עסקאות": "{:,.0f}",
+                                "ממוצע עסקה ביום": "{:,.1f} ₪",
+                            }),
+                            use_container_width=True,
+                            height=400,
+                        )
+
+                with col_emp2:
+                    st.markdown("#### פירוט בונוסים")
+                    emp_det = details.get(emp, {})
+                    if not emp_det:
+                        st.write("אין בונוסים מפורטים למוכרן זה.")
+                    else:
+                        for cat, amt in emp_det.items():
+                            st.write(f"• **{cat}** – {amt:,.0f} ₪")
+
+                # ── פילטר עסקאות בודדות ────────────────────────
+                st.markdown("---")
+                st.subheader("🔍 פילטר עסקאות לפי סכום")
+
+                min_price_emp = st.number_input(
                     "מכירות מעל:",
                     min_value=0,
                     value=0,
                     step=50,
-                    key="price_filter"
+                    key=f"price_filter_{emp}"
                 )
-                # ==================================
 
-                if emp_daily_df.empty:
-                    st.write("אין נתונים להצגה עבור מוכרן זה.")
+                emp_tx = all_tx_df[
+                    (all_tx_df["מוכרן"] == emp) &
+                    (all_tx_df["סכום עסקה"] > min_price_emp)
+                ].copy()
+
+                if emp_tx.empty:
+                    st.info("לא נמצאו עסקאות מעל הסכום שנבחר.")
                 else:
-                    filtered_df = emp_daily_df[emp_daily_df["סך מכירות יומי"] > min_price]
-                    st.caption(f"מספר ימים עם מכירות מעל {min_price:,} ₪: **{len(filtered_df)}**")
+                    st.caption(f"נמצאו **{len(emp_tx)}** עסקאות מעל {min_price_emp:,} ₪")
+                    emp_tx["תאריך"] = emp_tx["תאריך"].apply(
+                        lambda d: d.strftime("%d.%m.%Y")
+                    )
+                    emp_tx = emp_tx[["תאריך", "סכום עסקה"]].sort_values("תאריך", ascending=False)
                     st.dataframe(
-                        filtered_df.style.format({
-                            "סך מכירות יומי": "{:,.0f} ₪",
-                            "מספר עסקאות": "{:,.0f}",
-                            "ממוצע עסקה ביום": "{:,.1f} ₪",
-                        }),
+                        emp_tx.style.format({"סכום עסקה": "{:,.0f} ₪"}),
                         use_container_width=True,
-                        height=400,
+                        height=350,
                     )
 
-            with col_emp2:
-                st.markdown("#### פירוט בונוסים")
-                emp_det = details.get(selected_emp, {})
-                if not emp_det:
-                    st.write("אין בונוסים מפורטים למוכרן זה.")
-                else:
-                    for cat, amt in emp_det.items():
-                        st.write(f"• **{cat}** – {amt:,.0f} ₪")
-
+        # ── דוח טקסט ───────────────────────────────────────────
+        st.markdown("---")
         with st.expander("📄 דוח טקסט מלא (לצפייה / העתקה)", expanded=False):
             st.text(report_text)
 
